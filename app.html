@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FTP Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background: #f0f2f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .connection-form {
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #f8fafc;
+            border-radius: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        button:disabled {
+            background: #93c5fd;
+            cursor: not-allowed;
+        }
+
+        .file-explorer {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .file-header {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            padding: 12px;
+            background: #f8fafc;
+            font-weight: 600;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .file-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+            cursor: pointer;
+        }
+
+        .file-item:hover {
+            background: #f8fafc;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .status.success {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        #uploadInput {
+            margin: 20px 0;
+        }
+
+        .actions {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .actions button {
+            flex: 1;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #2563eb;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #currentPath {
+            margin: 20px 0;
+            padding: 10px;
+            background: #f8fafc;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 style="margin-bottom: 20px;">FTP Client</h1>
+        
+        <div class="connection-form">
+            <div class="form-group">
+                <label for="host">FTP Host:</label>
+                <input type="text" id="host" placeholder="ftp.example.com" value="test.rebex.net">
+            </div>
+            
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" placeholder="username" value="demo">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" placeholder="password" value="password">
+            </div>
+            
+            <div class="form-group">
+                <label for="port">Port:</label>
+                <input type="number" id="port" value="21">
+            </div>
+            
+            <button onclick="connect()" id="connectBtn">Connect</button>
+        </div>
+
+        <div id="currentPath"></div>
+
+        <div class="actions">
+            <button onclick="uploadFile()" id="uploadBtn" disabled>Upload File</button>
+            <button onclick="downloadSelected()" id="downloadBtn" disabled>Download</button>
+            <button onclick="deleteSelected()" id="deleteBtn" disabled>Delete</button>
+            <button onclick="createDirectory()" id="mkdirBtn" disabled>Create Directory</button>
+        </div>
+
+        <input type="file" id="uploadInput" style="display: none;" multiple>
+
+        <div class="file-explorer">
+            <div class="file-header">
+                <div>Name</div>
+                <div>Size</div>
+                <div>Modified</div>
+                <div>Permissions</div>
+            </div>
+            <div class="file-list" id="fileList"></div>
+        </div>
+
+        <div id="status"></div>
+    </div>
+
+    <script>
+        let currentPath = '/';
+        let selectedItems = new Set();
+        let connected = false;
+
+        // Initialize WebSocket connection to FTP proxy server
+        const ws = new WebSocket('ws://localhost:3000');
+
+        ws.onopen = () => {
+            showStatus('WebSocket connected', 'success');
+        };
+
+        ws.onmessage = (event) => {
+            const response = JSON.parse(event.data);
+            
+            switch(response.type) {
+                case 'connect':
+                    handleConnectResponse(response);
+                    break;
+                case 'list':
+                    handleListResponse(response);
+                    break;
+                case 'upload':
+                    handleUploadResponse(response);
+                    break;
+                case 'download':
+                    handleDownloadResponse(response);
+                    break;
+                case 'delete':
+                    handleDeleteResponse(response);
+                    break;
+                case 'mkdir':
+                    handleMkdirResponse(response);
+                    break;
+                case 'error':
+                    showStatus(response.message, 'error');
+                    break;
+            }
+        };
+
+        ws.onerror = (error) => {
+            showStatus('WebSocket error: ' + error.message, 'error');
+        };
+
+        function connect() {
+            const host = document.getElementById('host').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const port = document.getElementById('port').value;
+
+            ws.send(JSON.stringify({
+                type: 'connect',
+                data: { host, username, password, port }
+            }));
+
+            document.getElementById('connectBtn').disabled = true;
+            showStatus('Connecting...', 'success');
+        }
+
+        function handleConnectResponse(response) {
+            if (response.success) {
+                connected = true;
+                showStatus('Connected successfully', 'success');
+                enableButtons();
+                listFiles();
+            } else {
+                document.getElementById('connectBtn').disabled = false;
+                showStatus('Connection failed: ' + response.message, 'error');
+            }
+        }
+
+        function listFiles() {
+            ws.send(JSON.stringify({
+                type: 'list',
+                data: { path: currentPath }
+            }));
+            document.getElementById('currentPath').textContent = 'Current Path: ' + currentPath;
+        }
+
+        function handleListResponse(response) {
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+
+            if (currentPath !== '/') {
+                // Add parent directory option
+                const parentItem = createFileItem({
+                    name: '..',
+                    type: 'directory',
+                    size: '',
+                    modified: '',
+                    permissions: ''
+                });
+                fileList.appendChild(parentItem);
+            }
+
+            response.files.forEach(file => {
+                const fileItem = createFileItem(file);
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        function createFileItem(file) {
+            const item = document.createElement('div');
+            item.className = 'file-item';
+            
+            item.innerHTML = `
+                <div>${file.name}</div>
+                <div>${formatSize(file.size)}</div>
+                <div>${file.modified}</div>
+                <div>${file.permissions}</div>
+            `;
+
+            if (file.name !== '..') {
+                item.onclick = () => {
+                    if (file.type === 'directory') {
+                        currentPath = file.name === '..' 
+                            ? currentPath.split('/').slice(0, -2).join('/') + '/'
+                            : currentPath + file.name + '/';
+                        listFiles();
+                    } else {
+                        toggleSelection(file.name);
+                        item.style.background = selectedItems.has(file.name) ? '#e5e7eb' : '';
+                    }
+                };
+            }
+
+            return item;
+        }
+
+        function toggleSelection(name) {
+            if (selectedItems.has(name)) {
+                selectedItems.delete(name);
+            } else {
+                selectedItems.add(name);
+            }
+            updateButtonStates();
+        }
+
+        function uploadFile() {
+            document.getElementById('uploadInput').click();
+        }
+
+        document.getElementById('uploadInput').onchange = function(e) {
+            const files = e.target.files;
+            
+            for (let file of files) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    ws.send(JSON.stringify({
+                        type: 'upload',
+                        data: {
+                            path: currentPath,
+                            name: file.name,
+                            content: e.target.result
+                        }
+                    }));
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        };
+
+        function downloadSelected() {
+            selectedItems.forEach(item => {
+                ws.send(JSON.stringify({
+                    type: 'download',
+                    data: {
+                        path: currentPath,
+                        name: item
+                    }
+                }));
+            });
+        }
+
+        function deleteSelected() {
+            selectedItems.forEach(item => {
+                ws.send(JSON.stringify({
+                    type: 'delete',
+                    data: {
+                        path: currentPath,
+                        name: item
+                    }
+                }));
+            });
+        }
+
+        function createDirectory() {
+            const name = prompt('Enter directory name:');
+            if (name) {
+                ws.send(JSON.stringify({
+                    type: 'mkdir',
+                    data: {
+                        path: currentPath,
+                        name: name
+                    }
+                }));
+            }
+        }
+
+        function handleUploadResponse(response) {
+            if (response.success) {
+                showStatus(`Uploaded ${response.filename}`, 'success');
+                listFiles();
+            } else {
+                showStatus('Upload failed: ' + response.message, 'error');
+            }
+        }
+
+        function handleDownloadResponse(response) {
+            if (response.success) {
+                // Create and trigger download
+                const blob = new Blob([response.content], { type: 'application/octet-stream' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = response.filename;
+                a.click();
+                window.URL.revokeObjectURL(url);
+                showStatus(`Downloaded ${response.filename}`, 'success');
+            } else {
+                showStatus('Download failed: ' + response.message, 'error');
+            }
+        }
+
+        function handleDeleteResponse(response) {
+            if (response.success) {
+                showStatus(`Deleted ${response.filename}`, 'success');
+                selectedItems.delete(response.filename);
+                listFiles();
+            } else {
+                showStatus('Delete failed: ' + response.message, 'error');
+            }
+        }
+
+        function handleMkdirResponse(response) {
+            if (response.success) {
+                showStatus(`Created directory ${response.dirname}`, 'success');
+                listFiles();
+            } else {
+                showStatus('Create directory failed: ' + response.message, 'error');
+            }
+        }
+
+        function enableButtons() {
+            document.getElementById('uploadBtn').disabled = false;
+            document.getElementById('mkdirBtn').disabled = false;
+            updateButtonStates();
+        }
+
+        function updateButtonStates() {
+            const hasSelection = selectedItems.size > 0;
+            document.getElementById('downloadBtn').disabled = !hasSelection;
+            document.getElementById('deleteBtn').disabled = !hasSelection;
+        }
+
+        function formatSize(bytes) {
+            if (!bytes) return '';
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = 'status ' + type;
+        }
+    </script>
+</body>
+</html>
